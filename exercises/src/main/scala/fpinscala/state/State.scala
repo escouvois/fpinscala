@@ -5,18 +5,17 @@ trait RNG {
   def nextInt: (Int, RNG) // Should generate a random `Int`. We'll later define other functions in terms of `nextInt`.
 }
 
-object RNG {
-
-  // NB - this was called SimpleRNG in the book text
-
-  case class Simple(seed: Long) extends RNG {
-    def nextInt: (Int, RNG) = {
-      val newSeed = (seed * 0x5DEECE66DL + 0xBL) & 0xFFFFFFFFFFFFL // `&` is bitwise AND. We use the current seed to generate a new seed.
-      val nextRNG = Simple(newSeed) // The next state, which is an `RNG` instance created from the new seed.
-      val n = (newSeed >>> 16).toInt // `>>>` is right binary shift with zero fill. The value `n` is our new pseudo-random integer.
-      (n, nextRNG) // The return value is a tuple containing both a pseudo-random integer and the next `RNG` state.
-    }
+// NB - this was called SimpleRNG in the book text
+case class Simple(seed: Long) extends RNG {
+  def nextInt: (Int, RNG) = {
+    val newSeed = (seed * 0x5DEECE66DL + 0xBL) & 0xFFFFFFFFFFFFL // `&` is bitwise AND. We use the current seed to generate a new seed.
+    val nextRNG = Simple(newSeed) // The next state, which is an `RNG` instance created from the new seed.
+    val n = (newSeed >>> 16).toInt // `>>>` is right binary shift with zero fill. The value `n` is our new pseudo-random integer.
+    (n, nextRNG) // The return value is a tuple containing both a pseudo-random integer and the next `RNG` state.
   }
+}
+
+object RNG {
 
   type Rand[+A] = RNG => (A, RNG)
 
@@ -41,7 +40,7 @@ object RNG {
     (i / (Int.MaxValue + 1), rng1)
   }
 
-  val doubleWithMap: Rand[Int] =
+  val doubleWithMap: Rand[Double] =
     map(nonNegativeInt)(_ / (Int.MaxValue + 1))
 
   def intDouble(rng: RNG): ((Int, Double), RNG) = {
@@ -161,16 +160,7 @@ case class State[S, +A](run: S => (A, S)) {
   })
 }
 
-sealed trait Input
-
-case object Coin extends Input
-
-case object Turn extends Input
-
-case class Machine(locked: Boolean, candies: Int, coins: Int)
-
 object State {
-  type Rand[A] = State[RNG, A]
 
   def unit[S, A](a: A): State[S, A] =
     State(s => (a, s))
@@ -190,5 +180,50 @@ object State {
 
   def set[S](s: S): State[S, Unit] = State(_ => ((), s))
 
-  def simulateMachine(inputs: List[Input]): State[Machine, (Int, Int)] = ???
 }
+
+import State._
+
+sealed trait Input
+case object Coin extends Input
+case object Turn extends Input
+
+case class Machine(locked: Boolean, candies: Int, coins: Int)
+
+object Candy {
+  def simulateMachine(inputs: List[Input]): State[Machine, (Int, Int)] = for {
+    _ <- sequence(inputs.map(i => modify[Machine](updateState(i))))
+    s <- get
+  } yield (s.coins, s.candies)
+
+  def updateState(i: Input) = (m: Machine) => (i, m) match {
+    case (_, Machine(_, 0, _))                  => m
+    case (Turn, Machine(true, _, _))            => m
+    case (Coin, Machine(false, _, _))           => m
+    case (Turn, Machine(false, candies, coins)) => Machine(true, candies - 1, coins)
+    case (Coin, Machine(true, candies, coins))  => Machine(false, candies, coins + 1)
+  }
+
+  def randomInputs(count: Int): RNG2.Rand[List[Input]] =
+    RNG2.intsSequence(10).map(_.map(i => if (i % 2 == 0) Coin else Turn))
+
+  def main(args: Array[String]): Unit = {
+    val inputs = randomInputs(10).run(Simple(42))._1
+    println("Inputs :" + inputs)
+    println(simulateMachine(inputs).run(Machine(false, 5, 10))._1)
+  }
+}
+
+object RNG2 {
+
+  type Rand[A] = State[RNG, A]
+
+  def intsSequence(count: Int): Rand[List[Int]] =
+    sequence(List.fill(count)(State(_.nextInt)))
+
+  def main(args: Array[String]): Unit = {
+    println("intsSequence" + intsSequence(10).run(Simple(42)))
+  }
+
+}
+
